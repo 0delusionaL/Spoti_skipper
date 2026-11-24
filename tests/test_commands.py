@@ -156,6 +156,8 @@ def test_no_duplicate_phrases_across_commands():
     ("джарвис далее", "next"),
     ("джарвис на репит", "repeat"),
     ("джарвис поставь на репит", "repeat"),
+    ("джарвис ски", "next"),
+    ("jarvis ski", "next"),
 ])
 def test_new_phrases(phrase, cmd):
     assert P.parse(phrase) == cmd

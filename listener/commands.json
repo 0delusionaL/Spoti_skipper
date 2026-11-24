@@ -8,7 +8,7 @@
       "дальше", "далее", "давай дальше", "вперёд", "вперед", "крути дальше", "гони дальше",
       "следующий", "следующая", "следующую", "следующее", "следующий трек", "следующая песня", "следующую песню", "следующую давай",
       "некст", "нэкст", "нехт", "го некст",
-      "скип", "скипни", "скипай", "скипнуть", "скипни трек", "скипни песню",
+      "скип", "ски", "скипни", "скипай", "скипнуть", "скипни трек", "скипни песню",
       "пропусти", "пропускай", "пропустить", "пропусти трек", "пропусти песню",
       "переключи", "переключай", "переключи трек", "переключи песню",
       "листай", "листни", "перелистни",
@@ -19,7 +19,7 @@
       "не нравится", "мне не нравится", "не хочу эту", "не хочу это слушать", "убери эту песню",
 
       "next", "next one", "next please", "next song", "next track", "next song please", "next up", "go next", "go forward", "forward",
-      "skip", "skip it", "skip this", "skip song", "skip track", "skip the song", "skip this song", "skip this one", "skip this track", "skip it please",
+      "skip", "ski", "skip it", "skip this", "skip song", "skip track", "skip the song", "skip this song", "skip this one", "skip this track", "skip it please",
       "play next", "play the next song", "play the next one", "play something else", "something else",
       "another song", "another one", "change the song", "change song", "change track", "change it", "move on",
       "not this one", "not this song", "i dont like this", "i don't like this", "i hate this", "i hate this song", "pass", "nope"
