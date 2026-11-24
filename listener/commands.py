@@ -40,7 +40,8 @@ class CommandParser:
     # Пустой список = активатор не нужен (риск ложных срабатываний от самой музыки).
     wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_WAKE_WORDS))
     min_conf: float = 0.5
-    fuzzy: float = 0.8        # насколько похожим должно быть слово (0..1), 1 = только точное совпадение
+    fuzzy: float = 0.5        # насколько похожим должно быть слово команды (0..1), 1 = только точное совпадение
+    wake_fuzzy: float = 0.7   # то же для «Джарвис»; ниже не надо — иначе будит любое слово из песни
     max_gap: int = 6          # команда должна прозвучать не дальше N слов после активатора
 
     def __post_init__(self) -> None:
@@ -68,9 +69,9 @@ class CommandParser:
     def _is_wake(self, token: str) -> bool:
         if token in self.wake_words:
             return True
-        if token in self._known or self.fuzzy >= 1:
+        if token in self._known or self.wake_fuzzy >= 1:
             return False
-        return any(SequenceMatcher(None, token, w).ratio() >= self.fuzzy - 0.1 for w in self.wake_words)
+        return any(SequenceMatcher(None, token, w).ratio() >= self.wake_fuzzy for w in self.wake_words)
 
     # ---- разбор ----
     def parse(self, words: Sequence[Word] | str) -> Optional[str]:

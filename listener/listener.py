@@ -33,7 +33,8 @@ DEFAULT_CONFIG = {
     "model_paths": [],         # пути к своим моделям; пусто = скачать маленькие автоматически
     "require_wake_word": True,  # False = без «Джарвис» (музыка из колонок может триггерить команды)
     "min_conf": 0.5,
-    "fuzzy": 0.8,               # 1.0 = только точные совпадения слов
+    "fuzzy": 0.5,               # похожесть слов команд; 1.0 = только точные совпадения
+    "wake_fuzzy": 0.7,          # похожесть для «Джарвис»
     "cooldown_sec": 1.2,
     "skip_silence": True,       # не нагружать процессор в тишине; False — слушать всё подряд
     "silence_ratio": 2.0,       # голос = звук в N раз громче фона; плохо слышит — поставь 1.5
@@ -210,6 +211,7 @@ def build_parser(cfg: dict) -> CommandParser:
         wake_words=DEFAULT_WAKE_WORDS if cfg["require_wake_word"] else [],
         min_conf=float(cfg["min_conf"]),
         fuzzy=float(cfg["fuzzy"]),
+        wake_fuzzy=float(cfg["wake_fuzzy"]),
     )
 
 

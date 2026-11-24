@@ -58,7 +58,8 @@ def test_no_wake_word_no_command():
 
 
 def test_command_too_far_from_wake_word():
-    assert P.parse("джарвис я сегодня гулял по парку и было очень хорошо дальше") is None
+    p = CommandParser(fuzzy=0.8)
+    assert p.parse("джарвис я сегодня гулял по парку и было очень хорошо дальше") is None
 
 
 def test_known_words_not_fuzzed_into_each_other():
@@ -87,7 +88,7 @@ def test_low_confidence_filtered():
 
 
 def test_no_wake_word_mode():
-    p = CommandParser(wake_words=[])
+    p = CommandParser(wake_words=[], fuzzy=0.8)
     assert p.parse("скип") == "next"
     assert p.parse("привет") is None
 
