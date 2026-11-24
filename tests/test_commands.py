@@ -150,3 +150,12 @@ def test_no_duplicate_phrases_across_commands():
         for ph in phrases:
             assert ph not in seen, f"«{ph}» есть и в {seen[ph]}, и в {cmd}"
             seen[ph] = cmd
+
+
+@pytest.mark.parametrize("phrase,cmd", [
+    ("джарвис далее", "next"),
+    ("джарвис на репит", "repeat"),
+    ("джарвис поставь на репит", "repeat"),
+])
+def test_new_phrases(phrase, cmd):
+    assert P.parse(phrase) == cmd

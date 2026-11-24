@@ -24,4 +24,6 @@ if (-not (Test-Path $venv)) { & $py -m venv $venv }
 & (Join-Path $venv "Scripts\python.exe") -m pip install -r (Join-Path $root "listener\requirements.txt")
 
 Write-Host "== 3/3 Готово ==" -ForegroundColor Green
-Write-Host "Запусти start.bat и скажи: «Джарвис, некст»"
+Write-Host "Запускаю в трее (иконка микрофона возле часов). Скажи: «Джарвис, некст»"
+Write-Host "Дальше запускай двойным кликом по «Spoti Skipper.vbs». Автозапуск с Windows включается в меню иконки."
+Start-Process wscript.exe -ArgumentList ('"' + (Join-Path $root "Spoti Skipper.vbs") + '"')

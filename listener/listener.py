@@ -53,12 +53,19 @@ def load_config(path: Path) -> dict:
 class Hub:
     """Хранит подключённые расширения и рассылает им команды."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_change=None, on_command=None) -> None:
         self.clients: set = set()
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.on_change = on_change      # вызывается с числом подключённых Spotify
+        self.on_command = on_command    # вызывается с (команда, фраза)
+
+    def _changed(self) -> None:
+        if self.on_change:
+            self.on_change(len(self.clients))
 
     async def handler(self, ws) -> None:
         self.clients.add(ws)
+        self._changed()
         log(f"Spotify подключился ({len(self.clients)})")
         try:
             async for raw in ws:
@@ -74,6 +81,7 @@ class Hub:
             pass
         finally:
             self.clients.discard(ws)
+            self._changed()
             log("Spotify отключился")
 
     async def _broadcast(self, payload: str) -> None:
@@ -84,16 +92,24 @@ class Hub:
 
     def send_command(self, command: str, text: str = "") -> None:
         """Потокобезопасно: можно звать из потока распознавания."""
+        if self.on_command:
+            self.on_command(command, text)
         payload = json.dumps({"type": "command", "command": command, "text": text}, ensure_ascii=False)
         assert self.loop is not None
         asyncio.run_coroutine_threadsafe(self._broadcast(payload), self.loop)
 
 
 def log(msg: str) -> None:
-    print(time.strftime("%H:%M:%S"), msg, flush=True)
+    if sys.stdout is None:  # pythonw без перенаправления вывода
+        return
+    try:
+        print(time.strftime("%H:%M:%S"), msg, flush=True)
+    except (OSError, ValueError):
+        pass
 
 
-def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event, debug: bool = False) -> None:
+def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event, debug: bool = False,
+               paused: threading.Event | None = None, on_ready=None) -> None:
     import sounddevice as sd
     from vosk import KaldiRecognizer, Model, SetLogLevel
 
@@ -144,12 +160,16 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
     with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=4000, dtype="int16",
                            channels=1, callback=on_audio, device=cfg["device"]):
         hint = f"«{parser.wake_words[0].capitalize()}, некст»" if parser.wake_words else "«некст»"
-        log(f"Слушаю. Скажи, например, {hint}. Ctrl+C — выход.")
+        log(f"Слушаю. Скажи, например, {hint}.")
+        if on_ready:
+            on_ready()
         while not stop.is_set():
             try:
                 data = audio.get(timeout=0.5)
             except queue.Empty:
                 continue
+            if paused is not None and paused.is_set():
+                continue  # на паузе: звук никуда не идёт, процессор отдыхает
 
             chunks, phrase_ended = gate.feed(data) if gate else ([data], False)
             if gate and debug:
@@ -184,34 +204,52 @@ def keyboard_loop(hub: Hub, parser: CommandParser, stop: threading.Event) -> Non
     stop.set()
 
 
-async def main_async(args: argparse.Namespace) -> None:
-    import websockets
-
-    cfg = load_config(Path(args.config))
-    if args.device is not None:
-        cfg["device"] = args.device
-    parser = CommandParser(
+def build_parser(cfg: dict) -> CommandParser:
+    return CommandParser(
         commands=merge_commands(DEFAULT_COMMANDS, cfg.get("extra_commands")),
         wake_words=DEFAULT_WAKE_WORDS if cfg["require_wake_word"] else [],
         min_conf=float(cfg["min_conf"]),
         fuzzy=float(cfg["fuzzy"]),
     )
 
-    hub = Hub()
+
+async def run_service(cfg: dict, stop: threading.Event, *, keyboard: bool = False, debug: bool = False,
+                      paused: threading.Event | None = None, hub: Hub | None = None, on_ready=None) -> None:
+    """WebSocket-сервер + поток распознавания. Ошибку из потока пробрасывает наружу."""
+    import websockets
+
+    parser = build_parser(cfg)
+    hub = hub or Hub()
     hub.loop = asyncio.get_running_loop()
-    stop = threading.Event()
+    error: list[BaseException] = []
+
+    def worker_main() -> None:
+        try:
+            if keyboard:
+                keyboard_loop(hub, parser, stop)
+            else:
+                voice_loop(hub, cfg, parser, stop, debug, paused, on_ready)
+        except BaseException as e:  # noqa: BLE001
+            error.append(e)
 
     async with websockets.serve(hub.handler, "127.0.0.1", int(cfg["port"])):
         log(f"WebSocket: ws://127.0.0.1:{cfg['port']}")
-        target = keyboard_loop if args.keyboard else voice_loop
-        targs = (hub, parser, stop) if args.keyboard else (hub, cfg, parser, stop, args.debug)
-        worker = threading.Thread(target=target, args=targs, daemon=True)
+        worker = threading.Thread(target=worker_main, daemon=True)
         worker.start()
         try:
             while worker.is_alive():
                 await asyncio.sleep(0.3)
         finally:
             stop.set()
+    if error:
+        raise error[0]
+
+
+async def main_async(args: argparse.Namespace) -> None:
+    cfg = load_config(Path(args.config))
+    if args.device is not None:
+        cfg["device"] = args.device
+    await run_service(cfg, threading.Event(), keyboard=args.keyboard, debug=args.debug)
 
 
 def main() -> None:
