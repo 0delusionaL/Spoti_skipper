@@ -21,6 +21,7 @@ import threading
 import time
 from pathlib import Path
 
+from gate import SilenceGate
 from commands import DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, CommandParser, merge_commands, words_from_vosk
 
 HERE = Path(__file__).resolve().parent
@@ -34,6 +35,8 @@ DEFAULT_CONFIG = {
     "min_conf": 0.5,
     "fuzzy": 0.8,               # 1.0 = только точные совпадения слов
     "cooldown_sec": 1.2,
+    "skip_silence": True,       # не нагружать процессор в тишине; False — слушать всё подряд
+    "silence_ratio": 2.0,       # голос = звук в N раз громче фона; плохо слышит — поставь 1.5
     "device": None,          # номер микрофона из --list-devices; null = по умолчанию
     "extra_commands": {},    # {"next": ["врубай следующий"]} — сверх commands.json
 }
@@ -116,6 +119,28 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
         audio.put(bytes(indata))
 
     last = 0.0
+
+    def handle(name: str, raw_result: str) -> None:
+        nonlocal last
+        result = json.loads(raw_result)
+        text = result.get("text", "")
+        if not text or text == "[unk]":
+            return
+        cmd = parser.parse(words_from_vosk(result))
+        if debug:
+            log(f"   [{name}] слышу: «{text}»" + ("" if cmd else "  (не команда)"))
+        if not cmd:
+            return
+        now = time.monotonic()
+        if now - last < cfg["cooldown_sec"]:
+            return  # одну и ту же фразу могли поймать обе модели
+        last = now
+        log(f"🎤 [{name}] «{text}» → {cmd}")
+        hub.send_command(cmd, text)
+
+    gate = SilenceGate(ratio=float(cfg["silence_ratio"])) if cfg["skip_silence"] else None
+    gate_state = None
+
     with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=4000, dtype="int16",
                            channels=1, callback=on_audio, device=cfg["device"]):
         hint = f"«{parser.wake_words[0].capitalize()}, некст»" if parser.wake_words else "«некст»"
@@ -125,26 +150,22 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
                 data = audio.get(timeout=0.5)
             except queue.Empty:
                 continue
-            # Каждый кусок звука отдаём всем моделям; одну и ту же фразу
-            # обе могут распознать — повтор глушит cooldown.
-            for name, rec in recognizers:
-                if not rec.AcceptWaveform(data):
-                    continue
-                result = json.loads(rec.Result())
-                text = result.get("text", "")
-                if not text or text == "[unk]":
-                    continue
-                cmd = parser.parse(words_from_vosk(result))
-                if debug:
-                    log(f"   [{name}] слышу: «{text}»" + ("" if cmd else "  (не команда)"))
-                if not cmd:
-                    continue
-                now = time.monotonic()
-                if now - last < cfg["cooldown_sec"]:
-                    continue
-                last = now
-                log(f"🎤 [{name}] «{text}» → {cmd}")
-                hub.send_command(cmd, text)
+
+            chunks, phrase_ended = gate.feed(data) if gate else ([data], False)
+            if gate and debug:
+                state = "шумно, слушаю всё" if gate.bypass else ("голос" if gate.open else "тишина")
+                if state != gate_state:
+                    log(f"   фильтр: {state}")
+                    gate_state = state
+
+            for chunk in chunks:
+                for name, rec in recognizers:
+                    if rec.AcceptWaveform(chunk):
+                        handle(name, rec.Result())
+            if phrase_ended:
+                # Дальше звук не пойдёт — забираем то, что модели успели услышать.
+                for name, rec in recognizers:
+                    handle(name, rec.FinalResult())
 
 
 def keyboard_loop(hub: Hub, parser: CommandParser, stop: threading.Event) -> None:
