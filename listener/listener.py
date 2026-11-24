@@ -28,8 +28,8 @@ SAMPLE_RATE = 16000
 
 DEFAULT_CONFIG = {
     "port": 8974,
-    "lang": "ru",            # язык модели Vosk: ru / en-us
-    "model_path": "",        # путь к своей модели; пусто = скачать маленькую автоматически
+    "langs": ["ru", "en-us"],  # модели Vosk, слушают одновременно; ["ru"] — только русский (меньше нагрузка)
+    "model_paths": [],         # пути к своим моделям; пусто = скачать маленькие автоматически
     "require_wake_word": True,  # False = без «Джарвис» (музыка из колонок может триггерить команды)
     "min_conf": 0.5,
     "fuzzy": 0.8,               # 1.0 = только точные совпадения слов
@@ -95,12 +95,20 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
     from vosk import KaldiRecognizer, Model, SetLogLevel
 
     SetLogLevel(-1)
-    log("Загружаю модель Vosk (первый запуск скачает ~45 МБ)...")
-    model = Model(cfg["model_path"]) if cfg["model_path"] else Model(lang=cfg["lang"])
+    # Старый формат конфига: "lang": "ru", "model_path": "..."
+    langs = cfg.get("langs") or [cfg.get("lang", "ru")]
+    if isinstance(langs, str):
+        langs = [langs]
+    paths = cfg.get("model_paths") or ([cfg["model_path"]] if cfg.get("model_path") else [])
 
-    # Без ограничения словаря: «Джарвиса» нет в словаре модели, ловим похожие слова нечётко.
-    rec = KaldiRecognizer(model, SAMPLE_RATE)
-    rec.SetWords(True)
+    recognizers = []  # (название, распознаватель)
+    for src in (paths or langs):
+        log(f"Загружаю модель Vosk «{src}» (первый запуск скачает ~40–50 МБ)...")
+        model = Model(src) if paths else Model(lang=src)
+        # Без ограничения словаря: «Джарвиса» нет в словаре модели, ловим похожие слова нечётко.
+        rec = KaldiRecognizer(model, SAMPLE_RATE)
+        rec.SetWords(True)
+        recognizers.append((Path(src).name if paths else src, rec))
 
     audio: queue.Queue[bytes] = queue.Queue()
 
@@ -117,23 +125,26 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
                 data = audio.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if not rec.AcceptWaveform(data):
-                continue
-            result = json.loads(rec.Result())
-            text = result.get("text", "")
-            if not text or text == "[unk]":
-                continue
-            cmd = parser.parse(words_from_vosk(result))
-            if debug:
-                log(f"   слышу: «{text}»" + ("" if cmd else "  (не команда)"))
-            if not cmd:
-                continue
-            now = time.monotonic()
-            if now - last < cfg["cooldown_sec"]:
-                continue
-            last = now
-            log(f"🎤 «{text}» → {cmd}")
-            hub.send_command(cmd, text)
+            # Каждый кусок звука отдаём всем моделям; одну и ту же фразу
+            # обе могут распознать — повтор глушит cooldown.
+            for name, rec in recognizers:
+                if not rec.AcceptWaveform(data):
+                    continue
+                result = json.loads(rec.Result())
+                text = result.get("text", "")
+                if not text or text == "[unk]":
+                    continue
+                cmd = parser.parse(words_from_vosk(result))
+                if debug:
+                    log(f"   [{name}] слышу: «{text}»" + ("" if cmd else "  (не команда)"))
+                if not cmd:
+                    continue
+                now = time.monotonic()
+                if now - last < cfg["cooldown_sec"]:
+                    continue
+                last = now
+                log(f"🎤 [{name}] «{text}» → {cmd}")
+                hub.send_command(cmd, text)
 
 
 def keyboard_loop(hub: Hub, parser: CommandParser, stop: threading.Event) -> None:

@@ -111,3 +111,42 @@ def test_every_phrase_resolves_to_its_command():
     for cmd, phrases in DEFAULT_COMMANDS.items():
         for ph in phrases:
             assert p.parse(f"джарвис {ph}") == cmd, ph
+
+
+@pytest.mark.parametrize("phrase,cmd", [
+    ("jarvis next song", "next"),
+    ("jarvis skip this song", "next"),
+    ("jarvis play the next one", "next"),
+    ("jarvis i don't like this", "next"),
+    ("jarvis play something else", "next"),
+    ("jarvis go back", "previous"),
+    ("jarvis play the last song", "previous"),
+    ("jarvis play it again", "restart"),
+    ("jarvis start over", "restart"),
+    ("jarvis pause the music", "pause"),
+    ("jarvis turn it off", "pause"),
+    ("jarvis turn it on", "play"),
+    ("jarvis keep playing", "play"),
+    ("jarvis turn it up", "volume_up"),
+    ("jarvis turn it down", "volume_down"),
+    ("jarvis i like this song", "like"),
+    ("jarvis add to liked songs", "like"),
+    ("jarvis remove from favorites", "unlike"),
+    ("jarvis shuffle", "shuffle"),
+    ("jarvis put on repeat", "repeat"),
+    ("jarvis please skip it", "next"),
+    ("джарвис листни", "next"),
+    ("джарвис крути по кругу", "repeat"),
+    ("джарвис больше не нравится", "unlike"),
+    ("джарвис добавь в понравившиеся", "like"),
+])
+def test_english_and_more_phrases(phrase, cmd):
+    assert P.parse(phrase) == cmd
+
+
+def test_no_duplicate_phrases_across_commands():
+    seen = {}
+    for cmd, phrases in DEFAULT_COMMANDS.items():
+        for ph in phrases:
+            assert ph not in seen, f"«{ph}» есть и в {seen[ph]}, и в {cmd}"
+            seen[ph] = cmd
