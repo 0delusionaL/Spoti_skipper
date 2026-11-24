@@ -1,10 +1,10 @@
 // NAME: Spoti Skipper
 // AUTHOR: 0delusionaL
 // DESCRIPTION: Голосовое управление Spotify: получает команды от локального слушателя (listener.py) по WebSocket.
-// VERSION: 1.0.0
+// VERSION: 1.1.0
 
 (function SpotiSkipper() {
-  const VERSION = "1.0.0";
+  const VERSION = "1.1.0";
   const PORT_KEY = "spoti-skipper:port";
   const DEFAULT_PORT = 8974;
   const VOLUME_STEP = 0.1;
@@ -12,11 +12,13 @@
   const LABELS = {
     next: "⏭ Следующий трек",
     previous: "⏮ Предыдущий трек",
+    restart: "⏪ Сначала",
     pause: "⏸ Пауза",
     play: "▶ Играю",
     volume_up: "🔊 Громче",
     volume_down: "🔉 Тише",
-    like: "❤ Лайк",
+    like: "❤ Добавлено в любимые",
+    unlike: "🤍 Убрано из любимых",
     shuffle: "🔀 Перемешивание",
     repeat: "🔁 Повтор",
   };
@@ -31,11 +33,14 @@
     switch (command) {
       case "next": P.next(); break;
       case "previous": P.back(); break;
+      case "restart": P.seek(0); break;
       case "pause": P.pause(); break;
       case "play": P.play(); break;
       case "volume_up": P.setVolume(clamp01(P.getVolume() + VOLUME_STEP)); break;
       case "volume_down": P.setVolume(clamp01(P.getVolume() - VOLUME_STEP)); break;
-      case "like": P.toggleHeart(); break;
+      // Только ставим / только снимаем, а не переключаем: «лайкни» не снимет уже стоящий лайк.
+      case "like": if (!P.getHeart()) P.toggleHeart(); break;
+      case "unlike": if (P.getHeart()) P.toggleHeart(); break;
       case "shuffle": P.toggleShuffle(); break;
       case "repeat": P.toggleRepeat(); break;
       default: return false;

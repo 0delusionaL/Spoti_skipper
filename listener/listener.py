@@ -6,6 +6,7 @@
 Запуск:
     python listener.py                 # голосом
     python listener.py --keyboard      # вводить команды с клавиатуры (для проверки)
+    python listener.py --debug         # печатать всё, что услышано (подбирать слова)
     python listener.py --list-devices  # показать микрофоны
 """
 
@@ -20,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from commands import DEFAULT_COMMANDS, CommandParser, merge_commands, words_from_vosk
+from commands import DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, CommandParser, merge_commands, words_from_vosk
 
 HERE = Path(__file__).resolve().parent
 SAMPLE_RATE = 16000
@@ -29,11 +30,12 @@ DEFAULT_CONFIG = {
     "port": 8974,
     "lang": "ru",            # язык модели Vosk: ru / en-us
     "model_path": "",        # путь к своей модели; пусто = скачать маленькую автоматически
-    "wake_word": "музыка",   # "" = без wake word (музыка из колонок может триггерить команды)
-    "min_conf": 0.6,
+    "require_wake_word": True,  # False = без «Джарвис» (музыка из колонок может триггерить команды)
+    "min_conf": 0.5,
+    "fuzzy": 0.8,               # 1.0 = только точные совпадения слов
     "cooldown_sec": 1.2,
     "device": None,          # номер микрофона из --list-devices; null = по умолчанию
-    "extra_commands": {},    # {"next": ["некст"]}
+    "extra_commands": {},    # {"next": ["врубай следующий"]} — сверх commands.json
 }
 
 
@@ -88,7 +90,7 @@ def log(msg: str) -> None:
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
-def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event) -> None:
+def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event, debug: bool = False) -> None:
     import sounddevice as sd
     from vosk import KaldiRecognizer, Model, SetLogLevel
 
@@ -96,8 +98,8 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
     log("Загружаю модель Vosk (первый запуск скачает ~45 МБ)...")
     model = Model(cfg["model_path"]) if cfg["model_path"] else Model(lang=cfg["lang"])
 
-    grammar = json.dumps(parser.vocabulary() + ["[unk]"], ensure_ascii=False)
-    rec = KaldiRecognizer(model, SAMPLE_RATE, grammar)
+    # Без ограничения словаря: «Джарвиса» нет в словаре модели, ловим похожие слова нечётко.
+    rec = KaldiRecognizer(model, SAMPLE_RATE)
     rec.SetWords(True)
 
     audio: queue.Queue[bytes] = queue.Queue()
@@ -108,7 +110,7 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
     last = 0.0
     with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=4000, dtype="int16",
                            channels=1, callback=on_audio, device=cfg["device"]):
-        hint = f"«{parser.wake_word} дальше»" if parser.wake_word else "«дальше»"
+        hint = f"«{parser.wake_words[0].capitalize()}, некст»" if parser.wake_words else "«некст»"
         log(f"Слушаю. Скажи, например, {hint}. Ctrl+C — выход.")
         while not stop.is_set():
             try:
@@ -122,6 +124,8 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
             if not text or text == "[unk]":
                 continue
             cmd = parser.parse(words_from_vosk(result))
+            if debug:
+                log(f"   слышу: «{text}»" + ("" if cmd else "  (не команда)"))
             if not cmd:
                 continue
             now = time.monotonic()
@@ -135,7 +139,7 @@ def voice_loop(hub: Hub, cfg: dict, parser: CommandParser, stop: threading.Event
 def keyboard_loop(hub: Hub, parser: CommandParser, stop: threading.Event) -> None:
     names = ", ".join(parser.commands)
     log(f"Режим клавиатуры. Вводи команду ({names}) или фразу. Пустая строка — выход.")
-    p = CommandParser(commands=parser.commands, wake_word="", min_conf=0)
+    p = CommandParser(commands=parser.commands, wake_words=[], min_conf=0)
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -156,8 +160,9 @@ async def main_async(args: argparse.Namespace) -> None:
         cfg["device"] = args.device
     parser = CommandParser(
         commands=merge_commands(DEFAULT_COMMANDS, cfg.get("extra_commands")),
-        wake_word=cfg["wake_word"],
+        wake_words=DEFAULT_WAKE_WORDS if cfg["require_wake_word"] else [],
         min_conf=float(cfg["min_conf"]),
+        fuzzy=float(cfg["fuzzy"]),
     )
 
     hub = Hub()
@@ -167,7 +172,7 @@ async def main_async(args: argparse.Namespace) -> None:
     async with websockets.serve(hub.handler, "127.0.0.1", int(cfg["port"])):
         log(f"WebSocket: ws://127.0.0.1:{cfg['port']}")
         target = keyboard_loop if args.keyboard else voice_loop
-        targs = (hub, parser, stop) if args.keyboard else (hub, cfg, parser, stop)
+        targs = (hub, parser, stop) if args.keyboard else (hub, cfg, parser, stop, args.debug)
         worker = threading.Thread(target=target, args=targs, daemon=True)
         worker.start()
         try:
@@ -182,6 +187,7 @@ def main() -> None:
     ap.add_argument("--config", default=str(HERE / "config.json"))
     ap.add_argument("--keyboard", action="store_true", help="команды с клавиатуры вместо микрофона")
     ap.add_argument("--device", type=int, help="номер микрофона")
+    ap.add_argument("--debug", action="store_true", help="печатать всё распознанное")
     ap.add_argument("--list-devices", action="store_true")
     args = ap.parse_args()
 

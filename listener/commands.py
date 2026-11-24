@@ -1,27 +1,31 @@
 """Разбор распознанной речи в команды плеера.
 
+Слова и фразы живут в commands.json рядом с этим файлом.
 Модуль без внешних зависимостей, чтобы его можно было тестировать отдельно.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-# Команда -> слова, которые её вызывают (RU + EN).
-DEFAULT_COMMANDS: dict[str, list[str]] = {
-    "next": ["дальше", "следующий", "следующая", "следующую", "скип", "скипни",
-             "пропусти", "пропустить", "next", "skip"],
-    "previous": ["назад", "предыдущий", "предыдущая", "предыдущую", "верни",
-                 "back", "previous"],
-    "pause": ["пауза", "стоп", "останови", "pause", "stop"],
-    "play": ["играй", "продолжи", "продолжай", "плей", "play", "resume"],
-    "volume_up": ["громче", "louder"],
-    "volume_down": ["тише", "quieter"],
-    "like": ["лайк", "нравится", "like"],
-    "shuffle": ["перемешай", "шафл", "shuffle"],
-    "repeat": ["повтор", "repeat"],
-}
+COMMANDS_FILE = Path(__file__).resolve().with_name("commands.json")
+
+
+def load_phrases(path: Path = COMMANDS_FILE) -> tuple[list[str], dict[str, list[str]]]:
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    return list(data.get("wake_words", [])), {k: list(v) for k, v in data["commands"].items()}
+
+
+DEFAULT_WAKE_WORDS, DEFAULT_COMMANDS = load_phrases()
+
+
+def _norm(text: str) -> str:
+    return text.strip().lower().replace("ё", "е")
 
 
 @dataclass
@@ -32,45 +36,67 @@ class Word:
 
 @dataclass
 class CommandParser:
-    commands: dict[str, list[str]] = field(default_factory=lambda: dict(DEFAULT_COMMANDS))
-    # Пустая строка = wake word не нужен (риск ложных срабатываний от самой музыки).
-    wake_word: str = "музыка"
-    min_conf: float = 0.6
+    commands: dict[str, list[str]] = field(default_factory=lambda: {k: list(v) for k, v in DEFAULT_COMMANDS.items()})
+    # Пустой список = активатор не нужен (риск ложных срабатываний от самой музыки).
+    wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_WAKE_WORDS))
+    min_conf: float = 0.5
+    fuzzy: float = 0.8        # насколько похожим должно быть слово (0..1), 1 = только точное совпадение
+    max_gap: int = 6          # команда должна прозвучать не дальше N слов после активатора
 
     def __post_init__(self) -> None:
-        self.wake_word = (self.wake_word or "").strip().lower()
-        self._lookup: dict[str, str] = {}
-        for cmd, words in self.commands.items():
-            for w in words:
-                self._lookup[w.strip().lower()] = cmd
+        self.wake_words = [_norm(w) for w in self.wake_words if w.strip()]
+        # (команда, фраза-токены), длинные фразы первыми: «убери лайк» важнее «лайк».
+        self._phrases: list[tuple[str, list[str]]] = []
+        for cmd, phrases in self.commands.items():
+            for p in phrases:
+                toks = _norm(p).split()
+                if toks:
+                    self._phrases.append((cmd, toks))
+        self._phrases.sort(key=lambda x: -len(x[1]))
+        # Все «настоящие» слова из фраз: их нечётко не подменяем
+        # (иначе «выключи» превратилось бы во «включи»).
+        self._known = {t for _, toks in self._phrases for t in toks} | set(self.wake_words)
 
-    def vocabulary(self) -> list[str]:
-        """Слова для грамматики Vosk (ограничивает распознавание только ими)."""
-        vocab = set(self._lookup)
-        if self.wake_word:
-            vocab.add(self.wake_word)
-        return sorted(vocab)
+    # ---- сравнение слов ----
+    def _similar(self, token: str, target: str) -> bool:
+        if token == target:
+            return True
+        if token in self._known or len(target) < 4 or self.fuzzy >= 1:
+            return False
+        return SequenceMatcher(None, token, target).ratio() >= self.fuzzy
 
+    def _is_wake(self, token: str) -> bool:
+        if token in self.wake_words:
+            return True
+        if token in self._known or self.fuzzy >= 1:
+            return False
+        return any(SequenceMatcher(None, token, w).ratio() >= self.fuzzy - 0.1 for w in self.wake_words)
+
+    # ---- разбор ----
     def parse(self, words: Sequence[Word] | str) -> Optional[str]:
         """Вернёт имя команды или None.
 
-        С wake word команда должна идти ПОСЛЕ него в той же фразе:
-        «музыка дальше» -> next, «дальше» -> None.
+        «джарвис некст» -> next, «джарвис лайкни эту песню» -> like, «некст» -> None.
         """
         if isinstance(words, str):
             words = [Word(t) for t in words.split()]
-        tokens = [w.text.strip().lower() for w in words if w.conf >= self.min_conf and w.text.strip()]
-        tokens = [t for t in tokens if t != "[unk]"]
+        tokens = [_norm(w.text) for w in words if w.conf >= self.min_conf and w.text.strip()]
+        tokens = [t for t in tokens if t and t != "[unk]"]
 
-        if self.wake_word:
-            if self.wake_word not in tokens:
+        if self.wake_words:
+            idx = next((i for i, t in enumerate(tokens) if self._is_wake(t)), None)
+            if idx is None:
                 return None
-            tokens = tokens[tokens.index(self.wake_word) + 1:]
+            tokens = tokens[idx + 1: idx + 1 + self.max_gap + 3]
+            limit = self.max_gap
+        else:
+            limit = len(tokens)
 
-        for t in tokens:
-            cmd = self._lookup.get(t)
-            if cmd:
-                return cmd
+        for start in range(min(limit, len(tokens))):
+            for cmd, toks in self._phrases:
+                seg = tokens[start:start + len(toks)]
+                if len(seg) == len(toks) and all(self._similar(a, b) for a, b in zip(seg, toks)):
+                    return cmd
         return None
 
 
@@ -82,7 +108,7 @@ def words_from_vosk(result: dict) -> list[Word]:
 
 
 def merge_commands(base: dict[str, list[str]], extra: dict[str, Iterable[str]] | None) -> dict[str, list[str]]:
-    """Добавляет пользовательские синонимы из config.json к стандартным."""
+    """Добавляет пользовательские фразы из config.json к стандартным."""
     merged = {k: list(v) for k, v in base.items()}
     for cmd, words in (extra or {}).items():
         merged.setdefault(cmd, [])

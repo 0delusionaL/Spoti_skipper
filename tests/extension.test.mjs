@@ -8,6 +8,7 @@ const ext = require("../extension/spoti-skipper.js");
 function mockSpicetify() {
   const calls = [];
   let volume = 0.5;
+  let heart = false;
   const rec = (name) => () => calls.push(name);
   return {
     calls,
@@ -16,7 +17,9 @@ function mockSpicetify() {
     showNotification(t) { this.notes.push(t); },
     Player: {
       next: rec("next"), back: rec("back"), play: rec("play"), pause: rec("pause"),
-      toggleHeart: rec("heart"), toggleShuffle: rec("shuffle"), toggleRepeat: rec("repeat"),
+      toggleHeart: () => { heart = !heart; calls.push("heart"); },
+      getHeart: () => heart,
+      seek: (ms) => calls.push("seek:" + ms), toggleShuffle: rec("shuffle"), toggleRepeat: rec("repeat"),
       getVolume: () => volume,
       setVolume: (v) => { volume = v; calls.push("setVolume"); },
       data: { item: { metadata: { title: "Song", artist_name: "Artist" } } },
@@ -60,4 +63,21 @@ test("handleMessage ignores garbage", () => {
   assert.equal(ext.handleMessage(S, "not json", () => {}), null);
   assert.equal(ext.handleMessage(S, JSON.stringify({ type: "hello" }), () => {}), null);
   assert.deepEqual(S.calls, []);
+});
+
+test("like/unlike are idempotent", () => {
+  const S = mockSpicetify();
+  ext.runCommand(S, "like");
+  ext.runCommand(S, "like");
+  assert.equal(S.Player.getHeart(), true);
+  ext.runCommand(S, "unlike");
+  ext.runCommand(S, "unlike");
+  assert.equal(S.Player.getHeart(), false);
+  assert.deepEqual(S.calls, ["heart", "heart"]);
+});
+
+test("restart seeks to 0", () => {
+  const S = mockSpicetify();
+  ext.runCommand(S, "restart");
+  assert.deepEqual(S.calls, ["seek:0"]);
 });

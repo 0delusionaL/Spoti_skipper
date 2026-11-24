@@ -24,4 +24,4 @@ if (-not (Test-Path $venv)) { & $py -m venv $venv }
 & (Join-Path $venv "Scripts\python.exe") -m pip install -r (Join-Path $root "listener\requirements.txt")
 
 Write-Host "== 3/3 Готово ==" -ForegroundColor Green
-Write-Host "Запусти start.bat и скажи: «музыка дальше»"
+Write-Host "Запусти start.bat и скажи: «Джарвис, некст»"
