@@ -1,0 +1,13 @@
+{
+  "port": 8974,
+  "lang": "ru",
+  "model_path": "",
+  "wake_word": "музыка",
+  "min_conf": 0.6,
+  "cooldown_sec": 1.2,
+  "device": null,
+  "extra_commands": {
+    "next": [],
+    "previous": []
+  }
+}
