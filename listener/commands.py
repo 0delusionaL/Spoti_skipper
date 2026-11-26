@@ -45,7 +45,9 @@ class CommandParser:
     max_gap: int = 6          # команда должна прозвучать не дальше N слов после активатора
 
     def __post_init__(self) -> None:
-        self.wake_words = [_norm(w) for w in self.wake_words if w.strip()]
+        self.wake_words = [" ".join(_norm(w).split()) for w in self.wake_words if w.strip()]
+        # Активатор может быть из нескольких слов: «эй спотик».
+        self._wake_phrases = [w.split() for w in self.wake_words]
         # (команда, фраза-токены), длинные фразы первыми: «убери лайк» важнее «лайк».
         self._phrases: list[tuple[str, list[str]]] = []
         for cmd, phrases in self.commands.items():
@@ -56,7 +58,7 @@ class CommandParser:
         self._phrases.sort(key=lambda x: -len(x[1]))
         # Все «настоящие» слова из фраз: их нечётко не подменяем
         # (иначе «выключи» превратилось бы во «включи»).
-        self._known = {t for _, toks in self._phrases for t in toks} | set(self.wake_words)
+        self._known = {t for _, toks in self._phrases for t in toks} | {t for w in self._wake_phrases for t in w}
 
     # ---- сравнение слов ----
     def _similar(self, token: str, target: str) -> bool:
@@ -66,12 +68,21 @@ class CommandParser:
             return False
         return SequenceMatcher(None, token, target).ratio() >= self.fuzzy
 
-    def _is_wake(self, token: str) -> bool:
-        if token in self.wake_words:
+    def _wake_token(self, token: str, target: str) -> bool:
+        if token == target:
             return True
-        if token in self._known or self.wake_fuzzy >= 1:
+        if token in self._known or self.wake_fuzzy >= 1 or len(target) < 4:
             return False
-        return any(SequenceMatcher(None, token, w).ratio() >= self.wake_fuzzy for w in self.wake_words)
+        return SequenceMatcher(None, token, target).ratio() >= self.wake_fuzzy
+
+    def _find_wake(self, tokens: list[str]) -> Optional[int]:
+        """Индекс слова сразу после активатора или None."""
+        for i in range(len(tokens)):
+            for phrase in self._wake_phrases:
+                seg = tokens[i:i + len(phrase)]
+                if len(seg) == len(phrase) and all(self._wake_token(a, b) for a, b in zip(seg, phrase)):
+                    return i + len(phrase)
+        return None
 
     # ---- разбор ----
     def parse(self, words: Sequence[Word] | str) -> Optional[str]:
@@ -85,10 +96,10 @@ class CommandParser:
         tokens = [t for t in tokens if t and t != "[unk]"]
 
         if self.wake_words:
-            idx = next((i for i, t in enumerate(tokens) if self._is_wake(t)), None)
+            idx = self._find_wake(tokens)
             if idx is None:
                 return None
-            tokens = tokens[idx + 1: idx + 1 + self.max_gap + 3]
+            tokens = tokens[idx: idx + self.max_gap + 3]
             limit = self.max_gap
         else:
             limit = len(tokens)

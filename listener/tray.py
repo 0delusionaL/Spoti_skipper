@@ -38,7 +38,8 @@ import asyncio  # noqa: E402
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from listener import Hub, load_config, log, run_service  # noqa: E402
+from healer import Healer  # noqa: E402
+from listener import Hub, load_config, log, run_service, wake_words  # noqa: E402
 
 LABELS = {
     "next": "Следующий трек", "previous": "Предыдущий трек", "restart": "Сначала",
@@ -113,6 +114,7 @@ class TrayApp:
         self.restart_requested = False
         self.thread: threading.Thread | None = None
         self.hub = Hub(on_change=self._on_spotify, on_command=self._on_command)
+        self.healer = Healer(connected=lambda: self.spotify > 0, notify=self.notify, log=log)
         self.icon = pystray.Icon(APP, ICONS["loading"], f"{APP}: загружаю модели…", menu=self._menu())
 
     # --- состояние ---
@@ -155,7 +157,8 @@ class TrayApp:
     def _on_ready(self) -> None:
         self.ready = True
         self.refresh()
-        self.notify("Слушаю. Скажи «Джарвис, некст».")
+        wake = wake_words(self.cfg)[0].capitalize() if self.cfg.get("require_wake_word", True) else ""
+        self.notify(f"Слушаю. Скажи «{wake + ', ' if wake else ''}некст».")
 
     # --- меню ---
     def _menu(self) -> pystray.Menu:
@@ -166,8 +169,10 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
             item("Пауза", self.toggle_pause, checked=lambda _: self.paused.is_set(), default=True),
             pystray.Menu.SEPARATOR,
-            item("Изменить фразы (commands.json)", lambda: open_path(HERE / "commands.json")),
-            item("Настройки (config.json)", lambda: open_path(HERE / "config.json")),
+            item("Настройки: активатор и фразы для скипа…", self.open_settings),
+            item("Изменить все фразы (commands.json)", lambda: open_path(HERE / "commands.json")),
+            item("Все настройки (config.json)", lambda: open_path(HERE / "config.json")),
+            item("Починить Spicetify сейчас", self.heal_now),
             item("Открыть лог", lambda: open_path(LOG_FILE)),
             item("Перезапустить (применить изменения)", self.restart),
             pystray.Menu.SEPARATOR,
@@ -190,6 +195,33 @@ class TrayApp:
         except OSError as e:
             self.notify(f"Не получилось изменить автозапуск: {e}")
         self.refresh()
+
+    def open_settings(self) -> None:
+        def worker() -> None:
+            try:
+                rc = subprocess.run([sys.executable, str(HERE / "settings.py")], cwd=str(HERE)).returncode
+            except OSError as e:
+                self.notify(f"Не открылись настройки: {e}")
+                return
+            if rc == 0:
+                self.notify("Настройки сохранены, перезапускаюсь…")
+                self.restart()
+            elif rc == 3:
+                self.notify("Окно настроек не открылось: в Python нет tkinter. "
+                            "Открываю config.json — активатор в поле \"wake_words\".")
+                open_path(HERE / "config.json")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def heal_now(self) -> None:
+        threading.Thread(target=lambda: self.healer.heal(manual=True), daemon=True).start()
+
+    def _heal_loop(self) -> None:
+        while not self.stop.wait(5):
+            if self.cfg.get("auto_heal", True):
+                try:
+                    self.healer.tick()
+                except Exception as e:  # noqa: BLE001
+                    log(f"автопочинка: {e!r}")
 
     def restart(self) -> None:
         self.restart_requested = True
@@ -222,6 +254,7 @@ class TrayApp:
         icon.visible = True
         self.thread = threading.Thread(target=self._service, daemon=True)
         self.thread.start()
+        threading.Thread(target=self._heal_loop, daemon=True).start()
 
     def run(self) -> None:
         log("=== старт в трее ===")

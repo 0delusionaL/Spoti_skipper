@@ -162,3 +162,24 @@ def test_no_duplicate_phrases_across_commands():
 ])
 def test_new_phrases(phrase, cmd):
     assert P.parse(phrase) == cmd
+
+
+def test_custom_wake_word():
+    p = CommandParser(wake_words=["пятница"])
+    assert p.parse("пятница некст") == "next"
+    assert p.parse("пятниса некст") == "next"      # чуть криво услышали
+    assert p.parse("джарвис некст") is None        # стандартный больше не работает
+
+
+def test_multi_word_wake_phrase():
+    p = CommandParser(wake_words=["эй спотик"])
+    assert p.parse("эй спотик лайкни эту песню") == "like"
+    assert p.parse("спотик лайкни") is None
+    assert p.parse("эй лайкни") is None
+
+
+def test_wake_words_from_config():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "listener"))
+    import listener
+    assert "джарвис" in listener.wake_words({"wake_words": []})
+    assert listener.wake_words({"wake_words": ["Пятница", " "]}) == ["Пятница"]

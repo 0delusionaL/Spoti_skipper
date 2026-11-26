@@ -35,10 +35,12 @@ DEFAULT_CONFIG = {
     "min_conf": 0.5,
     "fuzzy": 0.5,               # похожесть слов команд; 1.0 = только точные совпадения
     "wake_fuzzy": 0.7,          # похожесть для «Джарвис»
+    "wake_words": [],           # свой активатор, напр. ["пятница"]; пусто = «Джарвис» из commands.json
     "cooldown_sec": 1.2,
     "skip_silence": True,       # не нагружать процессор в тишине; False — слушать всё подряд
     "silence_ratio": 2.0,       # голос = звук в N раз громче фона; плохо слышит — поставь 1.5
     "device": None,          # номер микрофона из --list-devices; null = по умолчанию
+    "auto_heal": True,          # сам восстанавливать Spicetify после обновлений Spotify
     "extra_commands": {},    # {"next": ["врубай следующий"]} — сверх commands.json
 }
 
@@ -205,10 +207,16 @@ def keyboard_loop(hub: Hub, parser: CommandParser, stop: threading.Event) -> Non
     stop.set()
 
 
+def wake_words(cfg: dict) -> list[str]:
+    """Свой активатор из config.json или стандартный «Джарвис» со всеми вариантами."""
+    custom = [w for w in (cfg.get("wake_words") or []) if str(w).strip()]
+    return custom or list(DEFAULT_WAKE_WORDS)
+
+
 def build_parser(cfg: dict) -> CommandParser:
     return CommandParser(
         commands=merge_commands(DEFAULT_COMMANDS, cfg.get("extra_commands")),
-        wake_words=DEFAULT_WAKE_WORDS if cfg["require_wake_word"] else [],
+        wake_words=wake_words(cfg) if cfg["require_wake_word"] else [],
         min_conf=float(cfg["min_conf"]),
         fuzzy=float(cfg["fuzzy"]),
         wake_fuzzy=float(cfg["wake_fuzzy"]),

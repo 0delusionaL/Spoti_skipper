@@ -6,9 +6,11 @@
   "min_conf": 0.5,
   "fuzzy": 0.5,
   "wake_fuzzy": 0.7,
+  "wake_words": [],
   "cooldown_sec": 1.2,
   "skip_silence": true,
   "silence_ratio": 2.0,
   "device": null,
+  "auto_heal": true,
   "extra_commands": {}
 }
